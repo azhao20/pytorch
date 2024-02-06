@@ -173,9 +173,17 @@ class _InductorModule(torch.nn.Module):
                 cudagraphs=False,
             )
             logger.info("Completed lowering subgraph (%s) to Inductor", tag)
+            # AZ: finished lowering
+            print("Completed lowering to inductor")
+        
+        # AZ: seems like it overrides the forward function.
         with torch.profiler.record_function(tag):
             assert self.compiled is not None
-            return self.compiled(list(args))
+            # AZ: see if we can store the results.
+            res = self.compiled(list(args))
+            print(f"partial_lower::forward(): compute the result.\nRes: {res}")
+            return res
+            # return self.compiled(list(args))
 
 
 def _is_inductor_compatible(node: torch.fx.Node) -> Tuple[bool, str]:

@@ -134,6 +134,7 @@ def getattr_recursive(obj, target):
     return attr_itr
 
 
+# The object created from compile_fx
 class GraphLowering(torch.fx.Interpreter):
     graph_outputs: List[ir.IRNode]
 
@@ -318,6 +319,7 @@ class GraphLowering(torch.fx.Interpreter):
         if config.force_layout_optimization:
             return True
 
+        # Convolution default nodes.
         conv_nodes = [
             n for n in gm.graph.nodes if n.target == torch.ops.aten.convolution.default
         ]
@@ -423,6 +425,8 @@ class GraphLowering(torch.fx.Interpreter):
                     weighted_flops,
                 )
             return do_layout_opt
+
+        # A bunch of heuristics based on convolution performance.
 
         # Channels last layout can dramatically hurt grouped conv perf. E.g.
         # Conv with arguments like
@@ -676,6 +680,8 @@ class GraphLowering(torch.fx.Interpreter):
         if alt_name not in self.constants:
             self.constants[alt_name] = self.constants[name].to(device_override)
         return alt_name
+    
+    # These are the types of kernels that can be generated. Placeholder and call_function.
 
     def placeholder(self, target: str, args, kwargs):
         example = super().placeholder(target, args, kwargs)
@@ -870,6 +876,7 @@ class GraphLowering(torch.fx.Interpreter):
         finally:
             self.current_node = old
 
+    # Runs an individual node.
     def run_node(self, n: torch.fx.Node):
         def debug(msg):
             log.debug("lowering %s %s", LazyString(n.format_node), msg)
@@ -1139,6 +1146,7 @@ class GraphLowering(torch.fx.Interpreter):
             # cpu
             return self.codegen()
 
+    # Codegen?
     def codegen(self):
         from .scheduler import Scheduler
 
@@ -1168,6 +1176,7 @@ class GraphLowering(torch.fx.Interpreter):
     def compile_to_module(self):
         from .codecache import PyCodeCache
 
+        # Generates the code.
         code, linemap = (
             self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
         )
@@ -1198,6 +1207,8 @@ class GraphLowering(torch.fx.Interpreter):
         V.debug.copy(os.path.splitext(mod.__file__)[0] + ".debug")
         return mod
 
+    # Called after graph.run from compile_fx_inner.
+    # Inside the class GraphLowering.
     def compile_to_fn(self):
         if self.aot_mode:
             from .codecache import AotCodeCompiler
@@ -1225,6 +1236,7 @@ class GraphLowering(torch.fx.Interpreter):
                 self, code, serialized_extern_kernel_nodes, cuda=self.cuda
             )
         else:
+            print("graph.py::GraphLowering::compile_to_fn()")
             return self.compile_to_module().call
 
     def get_output_names(self):

@@ -160,6 +160,7 @@ class BaseSchedulerNode:
     def debug_str_extra(self) -> str:
         return ""
 
+    # Log the details for a node.
     def log_details(self):
         log.info(
             "%s: unmet_dependencies = %s, writes = %s",
@@ -1200,6 +1201,7 @@ class NodeUser:
 _post_grad_graph_counter = itertools.count()
 
 
+# Class that contains the scheduler nodes!
 class Scheduler:
     @dynamo_timed
     def __init__(self, nodes):
@@ -1214,6 +1216,7 @@ class Scheduler:
             *V.graph.constants.keys(),
         }
 
+        # Create the scheduler nodes.
         self.nodes = [self.create_scheduler_node(n) for n in nodes]
 
         # some new constants could have been created above
@@ -1259,7 +1262,7 @@ class Scheduler:
         self.create_foreach_nodes()
         self.topological_sort_schedule()
         self.logged_slow_fusion = set()
-        self.fuse_nodes()
+        self.fuse_nodes() # Fuse nodes.
         if config.reorder_for_compute_comm_overlap:
             # Refresh node_users and inverse_users to reflect fused nodes
             self.compute_node_users()
@@ -1268,6 +1271,9 @@ class Scheduler:
         V.debug.ir_post_fusion(self.nodes)
         V.debug.graph_diagram(self.nodes)
         self.debug_draw_graph()
+
+        # HMM: seems like we could use some debug logic.
+        self.debug_print_nodes("Scheduler nodes")
 
         # used during codegen:
         self.current_device: torch.device = None  # type: ignore[assignment]
@@ -1296,7 +1302,9 @@ class Scheduler:
             draw_buffers(self.nodes, print_graph=True)
 
     def debug_print_nodes(self, label):
+        # TODO: Enable a handler.
         if log.isEnabledFor(logging.INFO):
+            print("debug_print_nodes----------")
             log.info("%s:", label)
             for node in self.nodes:
                 node.log_details()

@@ -103,6 +103,7 @@ class Interpreter:
                 map_arg(node.args, lambda n: register_last_uses(n, node))
                 map_arg(node.kwargs, lambda n: register_last_uses(n, node))
 
+    # Called by _inductor/graph.py run.
     @compatibility(is_backward_compatible=True)
     def run(self, *args, initial_env : Optional[Dict[Node, Any]] = None, enable_io_processing : bool = True) -> Any:
         """

@@ -334,6 +334,7 @@ def get_patched_config_dict(config_patches=None) -> Dict[str, Any]:
         return config.get_config_copy()
 
 
+# The main compile function.
 @DebugContext.wrap
 @torch.utils._python_dispatch._disable_current_modes()
 @time_and_log(
@@ -415,6 +416,10 @@ def compile_fx_inner(
 
     start = time.time()
 
+    # AZ: main function that gets called.
+    print("Pre fx codegen and compilation")
+
+    # All of the graph compilation happens here.
     if config.fx_graph_cache and not aot_mode:
         compiled_graph = FxGraphCache.load(
             fx_codegen_and_compile, gm, example_inputs, graph_kwargs
@@ -423,6 +428,8 @@ def compile_fx_inner(
         compiled_graph = fx_codegen_and_compile(
             gm, example_inputs, **graph_kwargs  # type: ignore[arg-type]
         )
+
+    print("compile_fx: Post fx codegen and compilation")
 
     log.debug("FX codegen and compilation took %.3fs", time.time() - start)
 
@@ -555,6 +562,7 @@ def compile_fx_inner(
     return compiled_graph
 
 
+# Called from compile_fx_inner.
 def fx_codegen_and_compile(
     gm: torch.fx.GraphModule,
     example_inputs: List[torch.Tensor],
@@ -670,6 +678,7 @@ def fx_codegen_and_compile(
             const_code=const_code,
             const_module=const_graph,
         )
+        # This generates the computation graph.
         with V.set_graph_handler(graph):
             graph.run(*example_inputs)
             output_strides: List[Optional[Tuple[int, ...]]] = []
@@ -686,7 +695,12 @@ def fx_codegen_and_compile(
                     else:
                         output_strides.append(None)
 
+            # AZ: this converts the ir.Buffer objects to an actual runnable function.
+            print("The compiled fn")
             compiled_fn = graph.compile_to_fn()
+            
+            import traceback
+            traceback.print_stack()
 
             if V.aot_compilation is True:
                 return compiled_fn

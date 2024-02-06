@@ -482,6 +482,13 @@ class CachingAutotuner(KernelInterface):
 
     @dynamo_timed
     def benchmark_all_configs(self, *args, **kwargs):
+        """
+        AZ: TODO: this logic seems important for picking a kernel.
+        If we disable this logic, what happens? In more complex cases,
+        it seems like we could actually choose the wrong kernel.
+        Therefore, probably want to insert nvtx ranges elsewhere.
+        QoTD: where do we generate the output?
+        """
         timings = {
             launcher: self.bench(launcher, *args, **kwargs)
             for launcher in self.launchers
@@ -745,6 +752,8 @@ class DebugAutotuner(CachingAutotuner):
 
         super().run(*args, grid=grid, stream=stream)
         (launcher,) = self.launchers
+
+        # AZ: where we print results.
 
         if self.cached is None:
             ms = self.bench(launcher, *args, grid=grid)

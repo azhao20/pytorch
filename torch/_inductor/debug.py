@@ -555,6 +555,7 @@ def load_args_and_run_compile_fx_inner(path: str):
             return x
 
     fake_mode = torch._subclasses.FakeTensorMode(allow_non_fake_inputs=True)
+    print("debug: compile_fx_inner")
     with fake_mode, config.patch("save_args", False):
         args, kwargs = tree_map(handle_tensor, (args, kwargs))
         return compile_fx_inner(*args, **kwargs)
