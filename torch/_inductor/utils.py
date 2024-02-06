@@ -136,7 +136,9 @@ def do_bench_using_profiling(fn: Callable[[], Any], warmup=25, rep=100) -> float
     log.debug("profiling results: %s ms", res)
     return res
 
-
+# AZ: called from common.py, select_algorithm.py benchmark, triton_heuristics bench, 
+# which generates the print statement for fused kernels. Unclear what 
+# select_algorithm bench does for extern kernels.
 def do_bench(*args, **kwargs):
     @functools.lru_cache(None)
     def load_triton():
@@ -161,6 +163,10 @@ def do_bench(*args, **kwargs):
             else "percentiles"
         )
 
+    # AZ: TODO: install triton to determine what triton_do_bench is.
+    # We want to disable the multiple calls, but keep one.
+    # TODO: print what *args and **kwargs is, since this corresponds to 
+    # do_bench(kernel_call, rep=40, fast_flush=True).
     triton_do_bench, quantile_field_name = load_triton()
 
     if quantile_field_name not in kwargs:

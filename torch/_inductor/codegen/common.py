@@ -1366,6 +1366,8 @@ class ChoiceCaller:
         self.layout = layout
         self.input_nodes = input_nodes
 
+    # AZ: called from select_algorithm.py, the parents class of bench.
+    # Unclear if this actually gets called. Change reps=3
     def benchmark(self, *args, out) -> float:
         algo = self.to_callable()
         return do_bench(lambda: algo(*args, out=out))

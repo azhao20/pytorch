@@ -675,19 +675,26 @@ class ExternKernelCaller(ChoiceCaller):
     def __str__(self):
         return f"ExternKernelCaller({self.choice.call_name()})"
 
+    # AZ: this is for extern kernels. Check if this code is called?
+    # Interesting: change reps=3 to check if it gets called.
     def benchmark(self, *args, out):
+        print("select_algorithm.benchmark");
         if self.has_out_variant:
             return super().benchmark(*args, out=out)
         else:
+            print("No out variant")
             algo = self.to_callable()
             out_new = algo(*args)
+            print(f"out_new: {out_new}")
             torch._C._dynamo.guards.assert_size_stride(
                 out_new, tuple(out.size()), tuple(out.stride())
             )
             out.copy_(out_new)  # for correctness checking
-            return do_bench(lambda: algo(*args))
+            return do_bench(lambda: algo(*args), reps=40)
 
+    # AZ: seems like this is important.
     def to_callable(self):
+        print("to_callable!")
         fn = self.choice.to_callable()
         if self.kwargs:
             return functools.partial(fn, **self.kwargs)
@@ -709,8 +716,10 @@ class ExternKernelCaller(ChoiceCaller):
     def output_node(self):
         cls: Union[Type[ir.ExternKernelOut], Type[ir.ExternKernelAlloc]]
         if self.has_out_variant:
+            print("output_node: has out variant")
             cls = ir.ExternKernelOut
         else:
+            print("output_node: no out variant")
             cls = ir.ExternKernelAlloc
         return ir.TensorBox.create(
             cls(

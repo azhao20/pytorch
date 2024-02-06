@@ -124,7 +124,7 @@ def disable_pointwise_autotuning():
         return True
     return not config.triton.autotune_pointwise
 
-
+# AZ: the class that chooses the fused kernel.
 class CachingAutotuner(KernelInterface):
     """
     Simplified version of Triton autotuner that has no invalidation
@@ -419,6 +419,8 @@ class CachingAutotuner(KernelInterface):
 
         return binary, launcher
 
+    # AZ: this bench function gets called from run(), where we print the
+    # time.
     def bench(self, launcher, *args, grid, **kwargs):
         """Measure the performance of a given launcher"""
         if launcher.n_spills > config.triton.spill_threshold:
@@ -433,6 +435,7 @@ class CachingAutotuner(KernelInterface):
             self.gpu_device.current_device()
         )
 
+        # AZ: Can we just use this helper function?
         def kernel_call():
             if launcher.config.pre_hook is not None:
                 launcher.config.pre_hook(
@@ -447,6 +450,10 @@ class CachingAutotuner(KernelInterface):
                 stream=stream,
             )
 
+        # AZ: alternatively, could just make rep=1 to see what happens.
+        # Seems unlikely: should have some overhead for other profiling tools.
+        # Is this the same for extern kernels? Seems like those don't have profiling
+        # results. So probably want to delete this.
         return do_bench(kernel_call, rep=40, fast_flush=True)
 
     def clone_args(self, *args, **kwargs) -> Tuple[List[Any], Dict[str, Any]]:
@@ -500,6 +507,7 @@ class CachingAutotuner(KernelInterface):
     def autotune_to_one_config(self, *args, **kwargs):
         """Do the actual autotuning"""
         timings = self.benchmark_all_configs(*args, **kwargs)
+        # AZ: self.launchers stores the relevant kernel.
         self.launchers = [builtins.min(timings, key=timings.get)]
         if self.save_cache_hook:
             self.save_cache_hook(self.launchers[0].config)
@@ -547,6 +555,7 @@ class CachingAutotuner(KernelInterface):
             CudaKernelParamCache.set(key, params, launcher.bin.asm["hsaco"])
 
     def coordinate_descent_tuning(self, launcher, *args, **kwargs):
+        # AZ: what does this do?
         """
         Coordinate descent tuning can be run with or without max-autotune.
 
@@ -597,10 +606,13 @@ class CachingAutotuner(KernelInterface):
         return config2launcher.get(best_config)
 
     def run(self, *args, grid, stream, **kwargs):
+        # AZ: seems to be the main function we call.
         if len(self.launchers) != 1:
             if len(self.launchers) == 0:
                 self.precompile()
             if len(self.launchers) > 1:
+                # AZ: in case we don't have a launcher yet, this gets the launcher.
+                # This should be the kernel.
                 self.autotune_to_one_config(*args, grid=grid, **kwargs)
 
         if (
@@ -613,6 +625,7 @@ class CachingAutotuner(KernelInterface):
                 )
             ]
 
+        # AZ: seems like where we get the code.
         (launcher,) = self.launchers
         if launcher.store_cubin:
             self.save_cuda_kernel(grid, stream, launcher)
@@ -621,6 +634,9 @@ class CachingAutotuner(KernelInterface):
             launcher.config.pre_hook(
                 {**dict(zip(self.arg_names, args)), **launcher.config.kwargs, **kwargs}
             )
+
+        # AZ: seems to be where we return the result.
+        print(f"CachingAutotuner::run(). Should only pappear for fused kernels.")
 
         # guard the record_function_ctx and only call it if profiling is currently
         # in progress, to reduce latency when profiler is not turned on. Note that
@@ -706,7 +722,7 @@ def end_graph():
                 e,
             )
 
-
+# AZ: the class that inherits the class that chooses the kernel. Calls super().run().
 class DebugAutotuner(CachingAutotuner):
     def __init__(self, *args, regex_filter="", **kwargs):
         self.regex_filter = regex_filter
@@ -718,6 +734,15 @@ class DebugAutotuner(CachingAutotuner):
         kernel_name = f"{max(possible_names, key=len)}"
         if not re.match(self.regex_filter, kernel_name):
             return
+        
+        # AZ: Interesting—doesn't actually keep the results
+        # Calls super().run to get the launcher
+        # Then, prints the results. Doesn't return anything.
+        # TODO: disable the repeated calls to do_bench
+        # Try calling launcher directly.
+
+        print("DebugAutotuner::run: should only be here for fused kernels!")
+
         super().run(*args, grid=grid, stream=stream)
         (launcher,) = self.launchers
 
