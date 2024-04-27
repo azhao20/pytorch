@@ -18,6 +18,10 @@ import torch
 from torch._dynamo.testing import collect_results, reduce_to_scalar_loss
 from torch._dynamo.utils import clone_inputs
 
+# azhao: profile model
+from torch.utils.flop_counter import FlopCounterMode
+from collections import defaultdict
+op_to_params = defaultdict(list)
 
 # Enable FX graph caching
 if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
@@ -419,11 +423,21 @@ class TimmRunner(BenchmarkRunner):
     def forward_and_backward_pass(self, mod, inputs, collect_outputs=True):
         cloned_inputs = clone_inputs(inputs)
         self.optimizer_zero_grad(mod)
+
+        flop_counter = FlopCounterMode(mod) #, depth = None
         with self.autocast(**self.autocast_arg):
-            pred = mod(*cloned_inputs)
-            if isinstance(pred, tuple):
-                pred = pred[0]
-            loss = self.compute_loss(pred)
+            with flop_counter:
+                pred = mod(*cloned_inputs)
+                if isinstance(pred, tuple):
+                    pred = pred[0]
+                loss = self.compute_loss(pred)
+
+        global ops_to_params
+        model_shapes = flop_counter.get_shapes()
+        # Add model_shapes to op_to_params
+        for op, shapes in model_shapes.items():
+            op_to_params[op].extend(shapes)
+
         self.grad_scaler.scale(loss).backward()
         self.optimizer_step()
         if collect_outputs:
@@ -435,6 +449,18 @@ def timm_main():
     logging.basicConfig(level=logging.WARNING)
     warnings.filterwarnings("ignore")
     main(TimmRunner())
+
+    dir = "/n/holylabs/LABS/idreos_lab/Users/azhao/gpu_profiling/data/models/timm"
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    import pandas as pd
+    from torch.utils.flop_counter import op_registry
+    from torch.utils.flop_counter import op_names_registry
+    for op, params in op_to_params.items():
+        columns = op_registry[op]()
+        df = pd.DataFrame(params, columns=columns)
+        df.to_csv(os.path.join(dir, op_names_registry[op] + ".csv"), index=False)
+
 
 
 if __name__ == "__main__":

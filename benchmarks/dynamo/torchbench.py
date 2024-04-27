@@ -11,7 +11,12 @@ from collections import namedtuple
 from os.path import abspath, exists
 
 import torch
+import yaml
 
+# azhao: profile model
+from torch.utils.flop_counter import FlopCounterMode
+from collections import defaultdict
+op_to_params = defaultdict(list)
 
 try:
     from .common import BenchmarkRunner, load_yaml_file, main
@@ -28,10 +33,6 @@ torch.backends.cuda.matmul.allow_tf32 = True
 # Enable FX graph caching
 if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
     torch._inductor.config.fx_graph_cache = True
-
-# Enable Autograd caching
-if "TORCHINDUCTOR_AUTOGRAD_CACHE" not in os.environ:
-    torch._functorch.config.enable_autograd_cache = True
 
 
 def _reassign_parameters(model):
@@ -444,21 +445,37 @@ class TorchBenchmarkRunner(BenchmarkRunner):
         return reduce_to_scalar_loss(pred)
 
     def forward_pass(self, mod, inputs, collect_outputs=True):
+        flop_counter = FlopCounterMode(mod) #, depth = None
+        # print("forward pass!")
+        # breakpoint()
         with self.autocast(**self.autocast_arg):
-            if isinstance(inputs, dict):
-                return mod(**inputs)
-            else:
-                return mod(*inputs)
+            with flop_counter:
+                if isinstance(inputs, dict):
+                    return mod(**inputs)
+                else:
+                    return mod(*inputs)
 
     def forward_and_backward_pass(self, mod, inputs, collect_outputs=True):
         cloned_inputs = clone_inputs(inputs)
         self.optimizer_zero_grad(mod)
+
+        flop_counter = FlopCounterMode(mod) #, depth = None
+        # print("forward_and_backward pass!")
+        # breakpoint()
+        
         with self.autocast(**self.autocast_arg):
-            if isinstance(cloned_inputs, dict):
-                pred = mod(**cloned_inputs)
-            else:
-                pred = mod(*cloned_inputs)
+            with flop_counter:
+                if isinstance(cloned_inputs, dict):
+                    pred = mod(**cloned_inputs)
+                else:
+                    pred = mod(*cloned_inputs)
             loss = self.compute_loss(pred)
+        
+        global ops_to_params
+        model_shapes = flop_counter.get_shapes()
+        for op, shapes in model_shapes.items():
+            op_to_params[op].extend(shapes)
+            
         self.grad_scaler.scale(loss).backward()
         self.optimizer_step()
         if collect_outputs:
@@ -471,6 +488,17 @@ def torchbench_main():
     logging.basicConfig(level=logging.WARNING)
     warnings.filterwarnings("ignore")
     main(TorchBenchmarkRunner(), original_dir)
+
+    dir = "/n/holylabs/LABS/idreos_lab/Users/azhao/gpu_profiling/data/models/torchbench"
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    import pandas as pd
+    from torch.utils.flop_counter import op_registry
+    from torch.utils.flop_counter import op_names_registry
+    for op, params in op_to_params.items():
+        columns = op_registry[op]()
+        df = pd.DataFrame(params, columns=columns)
+        df.to_csv(os.path.join(dir, op_names_registry[op] + ".csv"), index=False)
 
 
 if __name__ == "__main__":
