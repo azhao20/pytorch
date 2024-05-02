@@ -97,6 +97,12 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
+"""
+azhao: save list.
+"""
+from collections import defaultdict
+op_to_params = defaultdict(list)
+
 # We are primarily interested in TF32
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -458,6 +464,10 @@ def timed(
         # Don't include reset_rng_state() to correctly measure timing
         reset_rng_state(use_xla)
         t_iter_begin = time.perf_counter()
+        """
+        model_iter_fn = forward_and_backward_pass
+        """
+        # breakpoint()
         result = model_iter_fn(model, example_inputs, collect_outputs=collect_outputs)
 
         # instead of calling sync on result_list, we should call mark_step.
@@ -624,6 +634,7 @@ def maybe_mark_step(args):
 
 def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
     """
+    azhao: main speedup experiment.
     Measure speedups over eager.
 
     Writes to ./speedups.csv
@@ -650,6 +661,10 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
             yield
 
     times = args.iterations_per_run
+    """
+    azhao: 1 time.
+    """
+    times = 1
 
     # Use higher tolerance for XLA since XLA cause numerical unstability when
     # graph size changes
@@ -664,6 +679,9 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
         else:
             frozen_model_iter_fn = torch._dynamo.run(model_iter_fn)
 
+        """
+        azhao: --repeat 1 => args.repeat=1.
+        """
         for rep in trange(args.repeat, desc="running benchmark"):
             inputs = (
                 randomize_input(copy.deepcopy(example_inputs))
@@ -689,9 +707,15 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
             # call mark_step between the 2 calls to make the comparison fair.
             maybe_mark_step(args)
 
+            """
+            frozen_model_iter_fn => Inductor lowered. Sanity check: we expect
+            the speedup time to be in the denominator, and we take median[0]/median[1]
+            """
+            from torch.utils.flop_counter import FlopCounterMode
+            flop_counter = FlopCounterMode(model)
             with maybe_mark_profile(p=p, mark="actual"), maybe_enable_compiled_autograd(
                 args.compiled_autograd
-            ):
+            ), flop_counter: # azhao: wrap with flop_counter
                 timings[rep, 1], actual_output = timed(
                     model,
                     frozen_model_iter_fn,
@@ -700,6 +724,13 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
                     times=times,
                     collect_outputs=args.collect_outputs,
                 )
+
+    # breakpoint()
+    # print(model.name)
+    global op_to_params
+    model_shapes = flop_counter.get_shapes()
+    for op, shapes in model_shapes.items():
+        op_to_params[op].extend(shapes)
 
     if args.export_profiler_trace:
         name = args.profiler_trace_name + "_" + model.name
@@ -2812,7 +2843,12 @@ class BenchmarkRunner:
             if self.args.print_compilation_time:
                 print(f"Compilation time: {compilation_time:.2f}")
 
+            """
+            azhao: arguments. TODO: might want to print the types of experiments
+            being called.
+            """
             if experiment.func is speedup_experiment:
+                print("run_performance_test(): speedup_experiment == True")
                 experiment_kwargs["compilation_latency"] = compilation_time
                 experiment_kwargs["compression_ratio"] = compression_ratio
                 experiment_kwargs["eager_peak_mem"] = eager_peak_mem
@@ -2847,6 +2883,18 @@ class BenchmarkRunner:
 
             if not hasattr(model, name):
                 model.name = name
+            # breakpoint()
+            """
+            Annoying to use flop_counter here, since this calls two models. 
+            Maybe: write my own experiment that only profiles and doesn't collect time.
+
+            What we did: override performance.
+
+            experiments == speedup_experiment, or one of the variations (ds == distributed)?
+
+            example_inputs: tuple of two tensors.
+            """
+
             results.append(experiment(model, example_inputs, **experiment_kwargs))
             return " ".join(map(str, results))
 
@@ -2930,6 +2978,7 @@ class BenchmarkRunner:
         elif self.args.tolerance:
             status = self.check_tolerance(name, model, example_inputs, optimize_ctx)
             print(status)
+        # azhao: is it possible to have performance==True but timing==False?
         elif self.args.performance:
             status = self.run_performance_test(
                 name, model, example_inputs, optimize_ctx, experiment, tag
@@ -3687,6 +3736,7 @@ def run(runner, args, original_dir=None):
         # Stricter check to disable fallbacks
         args.suppress_errors = False
 
+    # TODO: call multiprocess.
     if args.device_index is not None:
         if args.multiprocess:
             print("Cannot specify both --device_index and --multiprocess")
@@ -3735,7 +3785,7 @@ def run(runner, args, original_dir=None):
         torch._C._jit_set_nvfuser_enabled(False)
 
     if args.threads:
-        torch.set_num_threads(args.threads)
+        torch.set_num_threads(args.threads) # args.threads
 
     if args.verbose:
         torch._logging.set_logs(dynamo=logging.DEBUG)
@@ -3748,6 +3798,7 @@ def run(runner, args, original_dir=None):
 
     torch._dynamo.config.suppress_errors = args.suppress_errors
 
+    # Set the function to be called: model_iter_fn.
     if args.training:
         runner.model_iter_fn = runner.forward_and_backward_pass
         runner.skip_models.update(runner.skip_not_suitable_for_training_models)
@@ -3931,6 +3982,7 @@ def run(runner, args, original_dir=None):
         # Overwrite 'translation_validation' config, if specified.
         torch.fx.experimental._config.translation_validation = False
 
+    # Ah: experiment.
     experiment = functools.partial(experiment, args, runner.model_iter_fn)
 
     if args.only and should_diff_branch(args):
@@ -4088,6 +4140,10 @@ def run(runner, args, original_dir=None):
             else:
                 model, example_inputs = runner.cast_based_on_args(model, example_inputs)
             runner.setup_amp(current_device)
+
+            """
+            azhao: the main profiling step.
+            """
             runner.run_one_model(
                 name,
                 model,
@@ -4097,6 +4153,8 @@ def run(runner, args, original_dir=None):
                 explain=args.explain,
                 tag=args.tag,
             )
+            # breakpoint()
+
         if args.generate_aot_autograd_stats:
             stats_file = output_filename.split(".csv")[0] + "_stats.csv"
             output_csv(
@@ -4109,7 +4167,7 @@ def run(runner, args, original_dir=None):
                     *Stats.aot_summary(),
                 ],
             )
-    else:
+    else: # args.run_only == False
         metrics.purge_old_log_files()
         if output_filename and os.path.exists(output_filename):
             os.unlink(output_filename)
@@ -4129,7 +4187,7 @@ def run(runner, args, original_dir=None):
                 env = os.environ.copy()
                 if args.ci and name in CI_PRESERVE_COMPILE_DEBUG:
                     env["TORCH_COMPILE_DEBUG"] = "1"
-                subprocess.check_call(
+                subprocess.check_call( # azhao: generates subprocess to run --only one model.
                     [sys.executable] + sys.argv + [f"--only={name}"],
                     timeout=timeout,
                     env=env,

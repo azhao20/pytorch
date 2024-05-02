@@ -47,7 +47,7 @@ def mm_flop(a_shape, b_shape, *args, out_shape=None, **kwargs) -> int:
     k2, n = b_shape
     assert k == k2
     # NB(chilli): Should be 2 * k - 1 technically for FLOPs.
-    return m * n * 2 * k
+    return m * n * 2 * k, [int(m), int(k), int(n)]
 
 @register_flop_formula(aten.addmm)
 def addmm_flop(self_shape, a_shape, b_shape, out_shape=None, **kwargs) -> int:
@@ -65,7 +65,7 @@ def bmm_flop(a_shape, b_shape, out_shape=None, **kwargs) -> int:
     assert k == k2
     # NB(chilli): Should be 2 * k - 1 technically for FLOPs.
     flop = b * m * n * 2 * k
-    return flop
+    return flop, [int(b), int(m), int(k), int(n)] # azhao: same as mm but batched.
 
 @register_flop_formula(aten.baddbmm)
 def baddbmm_flop(self_shape, a_shape, b_shape, out_shape=None, **kwargs) -> int:
@@ -112,12 +112,14 @@ def conv_flop_count(
     # NB(chilli): I don't think this properly accounts for padding :think:
     # NB(chilli): Should be 2 * c_in - 1 technically for FLOPs.
     flop = prod(conv_shape) * prod(filter_size) * batch_size * c_out * c_in * 2
-    return flop
+    # return flop, (batch_size, c_in, c_out, "conv_shape", *conv_shape, "dims", *dims)
+    return flop, [x_shape, w_shape, out_shape, transposed]
 
 @register_flop_formula([aten.convolution, aten._convolution])
 def conv_flop(x_shape, w_shape, _bias, _stride, _padding, _dilation, transposed, *args, out_shape=None, **kwargs) -> int:
     """Count flops for convolution."""
-    return conv_flop_count(x_shape, w_shape, out_shape, transposed=transposed)
+    flop, _ = conv_flop_count(x_shape, w_shape, out_shape, transposed=transposed)
+    return flop, [x_shape, w_shape, _bias, _stride, _padding, _dilation, transposed, out_shape]
 
 
 @register_flop_formula(aten.convolution_backward)
@@ -208,21 +210,28 @@ def conv_backward_flop(
 
     Check [conv backwards decomposition as conv forwards]
     """
+    shapes = []
     # grad_inp as conv_transpose(grad_out, weight)
     if output_mask[0]:
         grad_input_shape = get_shape(out_shape[0])
-        flop_count += conv_flop_count(grad_out_shape, w_shape, grad_input_shape, not transposed)
+        flops, shape = conv_flop_count(grad_out_shape, w_shape, grad_input_shape, not transposed)
+        flop_count += flops
+        shapes.append(shape)
 
     if output_mask[1]:
         grad_weight_shape = get_shape(out_shape[1])
         if transposed:
             # grad_weight of transposed conv as conv(grad_out, inp)
-            flop_count += conv_flop_count(t(grad_out_shape), t(x_shape), t(grad_weight_shape), transposed=False)
+            flops, shape = conv_flop_count(t(grad_out_shape), t(x_shape), t(grad_weight_shape), transposed=False)
+            flop_count += flops
+            shapes.append(shape)
         else:
             # grad_weight as conv(inp, grad_out)
-            flop_count += conv_flop_count(t(x_shape), t(grad_out_shape), t(grad_weight_shape), transposed=False)
-
-    return flop_count
+            flops, shape = conv_flop_count(t(x_shape), t(grad_out_shape), t(grad_weight_shape), transposed=False)
+            flop_count += flops
+            shapes.append(shape)
+    return flop_count, [grad_out_shape, x_shape, w_shape, _bias, _stride, _padding, _dilation, transposed, \
+                        _output_padding, _groups, output_mask, out_shape, shapes]
 
 def sdpa_flop_count(query_shape, key_shape, value_shape):
     """
@@ -235,21 +244,28 @@ def sdpa_flop_count(query_shape, key_shape, value_shape):
     _b3, _h3, _s3, d_v = value_shape
     assert b == _b2 == _b3 and h == _h2 == _h3 and d_q == _d2 and s_k == _s3 and d_q == _d2
     total_flops = 0
+    shapes = []
     # q: [b, h, s_q, d_q] @ k: [b, h, d_q, s_k] -> scores: [b, h, s_q, s_k]
-    total_flops += bmm_flop((b * h, s_q, d_q), (b * h, d_q, s_k))
+    flops, shape = bmm_flop((b * h, s_q, d_q), (b * h, d_q, s_k))
+    total_flops += flops
+    shapes.append(shape)
     # scores: [b, h, s_q, s_k] @ v: [b, h, s_k, d_v] -> out: [b, h, s_q, d_v]
-    total_flops += bmm_flop((b * h, s_q, s_k), (b * h, s_k, d_v))
-    return total_flops
+    flops, shape = bmm_flop((b * h, s_q, s_k), (b * h, s_k, d_v))
+    total_flops += flops
+    shapes.append(shape)
+    return total_flops, [query_shape, key_shape, value_shape, shapes]
 
 
 @register_flop_formula([aten._scaled_dot_product_efficient_attention, aten._scaled_dot_product_flash_attention])
 def sdpa_flop(query_shape, key_shape, value_shape, *args, out_shape=None, **kwargs) -> int:
     """Count flops for self-attention."""
     # NB: We aren't accounting for causal attention here
-    return sdpa_flop_count(query_shape, key_shape, value_shape)
+    total_flops, shapes = sdpa_flop_count(query_shape, key_shape, value_shape)
+    return total_flops, shapes + [out_shape]
 
 
 def sdpa_backward_flop_count(grad_out_shape, query_shape, key_shape, value_shape):
+    """azhao: too lazy to add for all bmm_flops. Should be the same."""
     total_flops = 0
     b, h, s_q, d_q = query_shape
     _b2, _h2, s_k, _d2 = key_shape
@@ -258,28 +274,40 @@ def sdpa_backward_flop_count(grad_out_shape, query_shape, key_shape, value_shape
     assert b == _b2 == _b3 == _b4 and h == _h2 == _h3 == _h4 and d_q == _d2
     assert d_v == _d4 and s_k == _s3 and s_q == _s4
     total_flops = 0
+    shapes = []
     # Step 1: We recompute the scores matrix.
     # q: [b, h, s_q, d_q] @ k: [b, h, d_q, s_k] -> scores: [b, h, s_q, s_k]
-    total_flops += bmm_flop((b * h, s_q, d_q), (b * h, d_q, s_k))
+    flops, shape = bmm_flop((b * h, s_q, d_q), (b * h, d_q, s_k))
+    total_flops += flops
+    shapes.append(shape)
 
     # Step 2: We propagate the gradients through the score @ v operation.
     # gradOut: [b, h, s_q, d_v] @ v: [b, h, d_v, s_k] -> gradScores: [b, h, s_q, s_k]
-    total_flops += bmm_flop((b * h, s_q, d_v), (b * h, d_v, s_k))
+    flops, shape = bmm_flop((b * h, s_q, d_v), (b * h, d_v, s_k))
+    total_flops += flops
+    shapes.append(shape)
     # scores: [b, h, s_k, s_q] @ gradOut: [b, h, s_q, d_v] -> gradV: [b, h, s_k, d_v]
-    total_flops += bmm_flop((b * h, s_k, s_q), (b * h, s_q, d_v))
+    flops, shape = bmm_flop((b * h, s_k, s_q), (b * h, s_q, d_v))
+    total_flops += flops
+    shapes.append(shape)
 
     # Step 3: We propagate th gradients through the k @ v operation
     # gradScores: [b, h, s_q, s_k] @ k: [b, h, s_k, d_q] -> gradQ: [b, h, s_q, d_q]
-    total_flops += bmm_flop((b * h, s_q, s_k), (b * h, s_k, d_q))
+    flops, shape = bmm_flop((b * h, s_q, s_k), (b * h, s_k, d_q))
+    total_flops += flops
+    shapes.append(shape)
     # q: [b, h, d_q, s_q] @ gradScores: [b, h, s_q, s_k] -> gradK: [b, h, d_q, s_k]
-    total_flops += bmm_flop((b * h, d_q, s_q), (b * h, s_q, s_k))
-    return total_flops
+    flops, shape = bmm_flop((b * h, d_q, s_q), (b * h, s_q, s_k))
+    total_flops += flops
+    shapes.append(shape)
+    return total_flops, shape
 
 
 @register_flop_formula([aten._scaled_dot_product_efficient_attention_backward, aten._scaled_dot_product_flash_attention_backward])
 def sdpa_backward_flop(grad_out_shape, query_shape, key_shape, value_shape, *args, out_shape=None, **kwargs) -> int:
     """Count flops for self-attention backward."""
-    return sdpa_backward_flop_count(grad_out_shape, query_shape, key_shape, value_shape)
+    flops, _ = sdpa_backward_flop_count(grad_out_shape, query_shape, key_shape, value_shape)
+    return flops, [grad_out_shape, query_shape, key_shape, value_shape]
 
 flop_registry = {
     aten.mm: mm_flop,
@@ -333,6 +361,59 @@ def _pytreeify_preserve_structure(f):
     return nf
 
 
+"""
+azhao: functions used for collecting operator shapes.
+"""
+
+def process_mm() -> list[str]:
+    return ['m', 'k', 'n']
+
+def process_bmm() -> list[str]:
+    return ['b', 'm', 'k', 'n']
+
+def process_conv() -> list[str]:
+    return ['x_shape', 'w_shape', 'bias', 'stride', 'padding', 'dilation', 'transposed', 'out_shape']
+
+def process_sdpa() -> list[str]:
+    return ['query_shape', 'key_shape', 'value_shape', 'shapes']
+    
+def process_conv_backward() -> list[str]:
+    return ['grad_out_shape', 'x_shape', 'w_shape', 'bias', 'stride', 'padding', 'dilation', \
+            'transposed', 'output_padding', 'groups', 'output_mask', 'out_shape', 'shapes']
+
+def process_sdpa_backward() -> list[str]:
+    return ['grad_out_shape', 'query_shape', 'key_shape', 'value_shape']
+
+op_registry = {
+    aten.mm: process_mm,
+    aten.addmm: process_mm,
+    aten.bmm: process_bmm,
+    aten.baddbmm: process_bmm,
+    aten.convolution: process_conv,
+    aten._convolution: process_conv,
+    aten.convolution_backward: process_conv_backward,
+    aten._scaled_dot_product_efficient_attention: process_sdpa,
+    aten._scaled_dot_product_flash_attention: process_sdpa,
+    aten._scaled_dot_product_efficient_attention_backward: process_sdpa_backward,
+    aten._scaled_dot_product_flash_attention_backward: process_sdpa_backward,
+}
+
+# TODO: could combine those with the same `process` function.
+op_names_registry = {
+    aten.mm: "mm",
+    aten.addmm: "addmm",
+    aten.bmm: "bmm",
+    aten.baddbmm: "baddmm",
+    aten.convolution: "conv",
+    aten._convolution: "_conv",
+    aten.convolution_backward: "conv_backward",
+    aten._scaled_dot_product_efficient_attention: "sdpea",
+    aten._scaled_dot_product_flash_attention: "sdpfa",
+    aten._scaled_dot_product_efficient_attention_backward: "spdea_backward",
+    aten._scaled_dot_product_flash_attention_backward: "spdfa_backward",
+}
+
+
 class FlopCounterMode(TorchDispatchMode):
     """
     ``FlopCounterMode`` is a context manager that counts the number of flops within its context.
@@ -376,6 +457,9 @@ class FlopCounterMode(TorchDispatchMode):
             **flop_registry,
             **{k: v if getattr(v, "_get_raw", False) else shape_wrapper(v) for k, v in custom_mapping.items()}
         }
+
+        # azhao
+        self.shapes = defaultdict(list)
 
     def _register_forward_hooks(self):
         if self.mods is None:
@@ -471,6 +555,10 @@ class FlopCounterMode(TorchDispatchMode):
             Dict[str, Dict[Any, int]]: The flop counts as a dictionary.
         """
         return {k: dict(v) for k, v in self.flop_counts.items()}
+    
+    def get_shapes(self) -> Dict[str, Any]:
+        """azhao: Return the shapes of the operators as a dictionary."""
+        return dict(self.shapes)
 
     def get_table(self, depth=None):
         if depth is None:
@@ -539,8 +627,8 @@ class FlopCounterMode(TorchDispatchMode):
         return self
 
     def __exit__(self, *args):
-        if self.display:
-            print(self.get_table(self.depth))
+        # if self.display:
+        #     print(self.get_table(self.depth))
         self._deregister_forward_hooks()
         super().__exit__(*args)
 
@@ -552,15 +640,17 @@ class FlopCounterMode(TorchDispatchMode):
     def _count_flops(self, func_packet, out, args, kwargs):
         if func_packet in self.flop_registry:
             flop_count_func = self.flop_registry[func_packet]
-            flop_count = flop_count_func(*args, **kwargs, out_val=out)  # type: ignore[operator]
+            flop_count, shape = flop_count_func(*args, **kwargs, out_val=out)  # type: ignore[operator]
             if len(set(self.parents)) != len(self.parents):
                 print(
                     "The module hierarchy tracking seems to be messed up."
                     "Please file a bug or just run the flop counter without"
                     "tracking the module hierarchy (i.e. `with FlopCounterMode():`)"
                 )
+            # TODO: monitor if other functions call this. Probably not?
             for par in set(self.parents):
                 self.flop_counts[par][func_packet] += flop_count
+            self.shapes[func_packet].append(shape)
 
         return out
 

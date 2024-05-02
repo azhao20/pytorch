@@ -441,3 +441,17 @@ def torchbench_main():
 
 if __name__ == "__main__":
     torchbench_main()
+
+    from common import op_to_params
+
+    dir = "/n/holylabs/LABS/idreos_lab/Users/azhao/gpu_profiling/data/models/torchbench"
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    import pandas as pd
+    from torch.utils.flop_counter import op_registry
+    from torch.utils.flop_counter import op_names_registry
+    for op, params in op_to_params.items():
+        print(f"Op: {op}")
+        columns = op_registry[op]()
+        df = pd.DataFrame(params, columns=columns)
+        df.to_csv(os.path.join(dir, op_names_registry[op] + ".csv"), index=False)
