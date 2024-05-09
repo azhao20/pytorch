@@ -375,7 +375,7 @@ def process_conv() -> list[str]:
     return ['x_shape', 'w_shape', 'bias', 'stride', 'padding', 'dilation', 'transposed', 'out_shape']
 
 def process_sdpa() -> list[str]:
-    return ['query_shape', 'key_shape', 'value_shape', 'shapes']
+    return ['query_shape', 'key_shape', 'value_shape', 'shapes', 'out_shape']
     
 def process_conv_backward() -> list[str]:
     return ['grad_out_shape', 'x_shape', 'w_shape', 'bias', 'stride', 'padding', 'dilation', \

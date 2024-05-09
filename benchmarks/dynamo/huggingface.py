@@ -676,11 +676,10 @@ def huggingface_main():
 if __name__ == "__main__":
     huggingface_main()
 
+    directory = "/n/holylabs/LABS/idreos_lab/Users/azhao/gpu_profiling/data/models/huggingface"
     from common import op_to_params
-
-    dir = "/n/holylabs/LABS/idreos_lab/Users/azhao/gpu_profiling/data/models/huggingface"
-    if not os.path.exists(dir):
-        os.makedirs(dir)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
     import pandas as pd
     from torch.utils.flop_counter import op_registry
     from torch.utils.flop_counter import op_names_registry
@@ -688,4 +687,4 @@ if __name__ == "__main__":
         print(f"Op: {op}")
         columns = op_registry[op]()
         df = pd.DataFrame(params, columns=columns)
-        df.to_csv(os.path.join(dir, op_names_registry[op] + ".csv"), index=False)
+        df.to_csv(os.path.join(directory, op_names_registry[op] + ".csv"), index=False)
