@@ -135,13 +135,13 @@ class TestRuntimeEstimator(TestCase):
     ):
         """Runs a basic GPT-2 model"""
         vocab_size = 8192
-        bsz, seq_len = 8, 1024
+        bsz, seq_len = 64, 1024
         model_args = ModelArgs(
             n_layers=4,
             n_heads=12,
             vocab_size=vocab_size,
             max_seq_len=seq_len,
-            dim=768,
+            dim=1536,
             dropout_p=0.1,
         )
 
@@ -155,11 +155,16 @@ class TestRuntimeEstimator(TestCase):
             roofline_estimate = self._runtime_estimate(
                 "operator-level-cost-model", self._train_step, fake_args
             )
+            learned_estimate = self._runtime_estimate(
+                "operator-level-learned-model", self._train_step, fake_args
+            )
         benchmark_accuracy = actual_runtime / benchmark_estimate
         roofline_accuracy = actual_runtime / roofline_estimate
+        learned_accuracy = actual_runtime / learned_estimate
         print(
             f"Actual: {actual_runtime} Benchmark Estimate: {benchmark_estimate} Accuracy: {benchmark_accuracy}"
             f"\n Actual: {actual_runtime} Roofline Estimatee: {roofline_estimate} Accuracy: {roofline_accuracy}"
+            f"\n Actual: {actual_runtime} Learned Estimatee: {learned_estimate} Accuracy: {learned_accuracy}"
         )
         self.assertAlmostEqual(benchmark_accuracy, 1.0, delta=0.2)
         self.assertAlmostEqual(roofline_accuracy, 1.0, delta=0.3)
